@@ -82,7 +82,7 @@ router.post('/register' , (req, res) => {
 })
 
 // sign in restaurants  
-router.get('/signin', (req, res) => {
+router.post('/signin', (req, res) => {
 
     const { email, password } = req.body
     const sql = `
