@@ -9,6 +9,7 @@ const app = express()
 
 const userRouter = require('./routes/users')
 const authUser = require('./auth/userAuth')
+const restaurantRouter = require('./routes/restaurant') 
 
 // ========================================
 // MIDDLEWARE CONFIGURATION
@@ -30,6 +31,7 @@ app.use('/menuItemsImages', express.static('menuItemsImages'))
 // ========================================
 
 app.use('/user', authUser, userRouter)
+app.use('/restaurants', restaurantRouter)
 
 // ========================================
 // 404 HANDLER
