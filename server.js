@@ -9,7 +9,7 @@ const app = express()
 
 const userRouter = require('./routes/users')
 const authUser = require('./auth/userAuth')
-const restaurantRouter = require('./routes/restaurant') 
+const restaurantRouter = require('./routes/restaurants') 
 
 // ========================================
 // MIDDLEWARE CONFIGURATION
