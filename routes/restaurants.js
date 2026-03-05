@@ -67,7 +67,7 @@ router.post('/register' , (req, res) => {
                                         } else {
                                             res.send(result.createResult(null , {
                                                 user_id ,
-                                                restaurant_id : data[0].userId
+                                                restaurant_id : data.insertId
                                             }))
                                         }
                                     })
@@ -118,7 +118,8 @@ router.post('/signin', (req, res) => {
             if(hashedPass) {
                 const payload = {
                     user_id: user.user_id, 
-                    role: user.role
+                    role: user.role,
+                    restaurant_id: user.restaurant_id // Added for order/menu queries
                 }
 
                 const token = jwt.sign(payload ,config.secret,{ expiresIn: '1d' })
@@ -190,12 +191,25 @@ router.post('/categories' , upload.single('image_url') ,  (req, res) => {
     })
 })
 
-// restaurant-categorie s-status
-router.get('/profile' , (req , res) =>{
-    const user_id = req.headers.user_id
+// Middleware to extract and verify JWT Token for subsequent routes
+const authenticateToken = (req, res, next) => {
+    const token = req.headers['token']
+    if (!token) return res.send(result.createResult("Unauthorized - Token missing", null))
+
+    jwt.verify(token, config.secret, (err, decoded) => {
+        if (err) return res.send(result.createResult("Invalid Token", null))
+        req.user = decoded
+        next()
+    })
+}
+
+// restaurant-categories-status
+router.get('/profile' , authenticateToken, (req , res) =>{
+    // Use user_id from token
+    const user_id = req.user.user_id
     const sql = `
                 select 
-                u.full_name , 
+                u.full_name as name, 
                 u.email , 
                 u.phone , 
                 u.status ,
@@ -215,27 +229,18 @@ router.get('/profile' , (req , res) =>{
     pool.query(sql , user_id , (err , data) => {
         if(err) {
             res.send(result.createResult(err , null))
+        } else if (data.length === 0) {
+            res.send(result.createResult("Profile not found", null))
         } else {
-            res.send(result.createResult(null , {
-                name:data[0].full_name , 
-                email : data[0].email ,
-                phone : data[0].phone , 
-                restaurant_name : data[0].restaurant_name , 
-                cuisine_type : data[0].cuisine_type , 
-                address : data[0].address , 
-                rating : data[0].rating ,
-                open_time : data[0].open_time ,
-                close_time : data[0].close_time , 
-                status : data[0].status , 
-                verification_status : data[0].verification_status
-            }))
+            res.send(result.createResult(null , data[0]))
         }
     })
 }) 
 
-// restuarants-update-profile
-router.patch('/' , (req, res) => {
-    const user_id = req.headers.user_id 
+// restaurants-update-profile
+router.patch('/' , authenticateToken, (req, res) => {
+    // Use user_id from token
+    const user_id = req.user.user_id 
     const { full_name , phone , name , cuisine_type , address , open_time , close_time } = req.body
     const sql = `
                 update users u join restaurants r 
@@ -257,6 +262,106 @@ router.patch('/' , (req, res) => {
         } else {
             res.send(result.createResult(null , "Profile updated successfully"))
         }
+    })
+})
+
+
+// ==========================================
+// NEW: MENU & ORDER ROUTES FOR REACT NATIVE
+// ==========================================
+
+// 1. GET RESTAURANT MENU ITEMS
+router.get('/getmenus', authenticateToken, (req, res) => {
+    const restaurant_id = req.user.restaurant_id
+    const sql = `SELECT * FROM menu_items WHERE restaurant_id = ?`
+    
+    pool.query(sql, [restaurant_id], (err, data) => {
+        if(err) return res.send(result.createResult(err, null))
+        res.send(result.createResult(null, data))
+    })
+})
+
+// 2. ADD MENU ITEM
+const menuUpload = multer({ dest: 'menuItemsImages' })
+router.post('/addmenus', authenticateToken, menuUpload.single('image_url'), (req, res) => {
+    const restaurant_id = req.user.restaurant_id
+    const { name, description, price, isAvailable, category_id } = req.body
+    
+    if(!req.file) {
+        return res.send(result.createResult("Menu image is required", null))
+    }
+    
+    const ext = path.extname(req.file.originalname).toLowerCase()
+    const allowedType = ['.jpg' , '.jpeg' , '.png']
+    if(!allowedType.includes(ext)) {
+        fs.unlinkSync(req.file.path)
+        return res.send(result.createResult("Invalid image type", null))
+    }
+    
+    const image_url = req.file.filename + ext
+    const oldname = req.file.path
+    const newname = oldname + ext
+    fs.renameSync(oldname, newname)
+    
+    // Default values if missing
+    const isAvail = (isAvailable === 'true' || isAvailable === '1' || isAvailable === true) ? 1 : 0
+    const catId = category_id || 1 // Fallback category if none provided
+    
+    const sql = `INSERT INTO menu_items(restaurant_id, category_id, name, description, price, image_url, availability) VALUES (?, ?, ?, ?, ?, ?, ?)`
+    
+    pool.query(sql, [restaurant_id, catId, name, description, price, image_url, isAvail], (err, data) => {
+        if(err) return res.send(result.createResult(err, null))
+        res.send(result.createResult(null, { message: "Menu item added", item_id: data.insertId }))
+    })
+})
+
+// 3. DELETE MENU ITEM
+router.delete('/:itemId', authenticateToken, (req, res) => {
+    const restaurant_id = req.user.restaurant_id
+    const { itemId } = req.params
+    
+    const sql = `DELETE FROM menu_items WHERE item_id = ? AND restaurant_id = ?`
+    
+    pool.query(sql, [itemId, restaurant_id], (err, data) => {
+        if(err) return res.send(result.createResult(err, null))
+        if(data.affectedRows === 0) return res.send(result.createResult("Item not found", null))
+        res.send(result.createResult(null, "Menu item deleted"))
+    })
+})
+
+// 4. GET ALL ORDERS FOR THIS RESTAURANT
+router.get('/orders', authenticateToken, (req, res) => {
+    const restaurant_id = req.user.restaurant_id
+    
+    const sql = `
+        SELECT o.order_id, o.order_status, o.total_amount, o.order_date,
+               u.full_name as customer_name
+        FROM orders o
+        JOIN users u ON o.user_id = u.user_id
+        WHERE o.restaurant_id = ?
+        ORDER BY o.order_date DESC
+    `
+
+    pool.query(sql, [restaurant_id], (err, data) => {
+        if (err) return res.send(result.createResult(err, null))
+        res.send(result.createResult(null, data))
+    })
+})
+
+// 5. UPDATE ORDER STATUS
+router.put('/orders/:order_id/status', authenticateToken, (req, res) => {
+    const restaurant_id = req.user.restaurant_id
+    const { status } = req.body
+    const { order_id } = req.params
+
+    if (!status) return res.send(result.createResult("Status is required", null))
+
+    const sql = `UPDATE orders SET order_status = ? WHERE order_id = ? AND restaurant_id = ?`
+
+    pool.query(sql, [status, order_id, restaurant_id], (err, data) => {
+        if (err) return res.send(result.createResult(err, null))
+        if(data.affectedRows === 0) return res.send(result.createResult("Order not found", null))
+        res.send(result.createResult(null, "Order status updated to " + status))
     })
 })
 
