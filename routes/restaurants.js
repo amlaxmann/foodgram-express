@@ -365,4 +365,17 @@ router.put('/orders/:order_id/status', authenticateToken, (req, res) => {
     })
 })
 
+// get all restaurant categories
+router.get('/categories', (req, res) => {
+    const sql = `SELECT * FROM categories`
+    pool.query(sql, (err, data) => {
+        if(err) {
+            res.send(result.createResult(err, null))
+        } else {
+            res.send(result.createResult(null, data))
+        }
+    })
+})
+
+
 module.exports = router
