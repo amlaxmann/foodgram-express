@@ -109,7 +109,7 @@ router.post('/signin', (req, res) => {
             res.send(result.createResult(err, null))
         }
 
-        if (rows.length === 0) {
+        if (!rows ||rows.length === 0) {
            res.send(result.createResult("You are not authorized to access the restaurant portal" , null))
         }
 
